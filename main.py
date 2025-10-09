@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8275983870:AAGdsF0apIb57a5Oa3wumdUVLC9tLBIN-jQ")
-CREATOR_HASHTAG = "@illusivehacks"
+CREATOR_HASHTAG = "#illusivehacks"
 SUPPORTED_PLATFORMS = {
     'instagram': r'(https?://(?:www\.)?instagram\.com/(?:p|reel|stories)/)',
     'tiktok': r'(https?://(?:www\.|vm\.|vt\.)?tiktok\.com/)',
@@ -35,7 +35,7 @@ PLATFORM_EMOJIS = {
     'twitter': '🐦'
 }
 
-# Optimized yt-dlp settings for Koyeb
+# Optimized yt-dlp settings with improved Instagram handling
 YT_DLP_OPTS = {
     'outtmpl': '/tmp/%(id)s.%(ext)s',
     'format': 'best[height<=720][ext=mp4]/best[ext=mp4]/best',
@@ -43,8 +43,12 @@ YT_DLP_OPTS = {
     'no_warnings': True,
     'ignoreerrors': True,
     'quiet': True,
-    'socket_timeout': 10,
-    'retries': 3,
+    'socket_timeout': 15,
+    'retries': 5,  # Increased retries for Instagram
+    'fragment_retries': 5,
+    'skip_unavailable_fragments': True,
+    'extractor_retries': 3,  # Added for Instagram
+    'ratelimit': 5000000,  # Rate limit to avoid blocks
 }
 
 print("🚀 Starting LinkLift Bot on Koyeb...")
@@ -112,10 +116,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
-# === YOUR BOT FUNCTIONS === 
-# [Keep ALL your existing functions exactly as they are - they're perfect!]
-# start_command, help_command, button_handler, detect_platform, 
-# download_video, handle_message, error_handler
+# === UPDATED BOT FUNCTIONS === 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -211,7 +212,7 @@ Try me now with any link! 😊
 `https://instagram.com/reel/Cxxx.../`
 `https://instagram.com/p/Cxxx.../`
 
-*Note:* I automatically handle large files for fast delivery!
+*Note:* Instagram may have temporary download limits. Other platforms work perfectly!
 
 {CREATOR_HASHTAG} ✨
         """
@@ -288,13 +289,66 @@ def detect_platform(url: str) -> str:
             return platform
     return None
 
+def download_instagram_fallback(url: str) -> dict:
+    """Alternative Instagram download method with better error handling"""
+    try:
+        ydl_opts = {
+            'outtmpl': '/tmp/%(id)s.%(ext)s',
+            'format': 'best',
+            'no_warnings': True,
+            'ignoreerrors': True,
+            'quiet': True,
+            'socket_timeout': 20,
+            'retries': 3,
+            'extractor_args': {
+                'instagram': {
+                    'format': 'download_url'
+                }
+            }
+        }
+        
+        logger.info("🔄 Trying Instagram fallback method...")
+        start_time = datetime.now()
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            
+            download_time = (datetime.now() - start_time).total_seconds()
+            file_size = os.path.getsize(filename) / (1024 * 1024)
+            
+            logger.info(f"✅ Instagram fallback completed in {download_time:.1f}s - {file_size:.1f}MB")
+            
+            return {
+                'success': True,
+                'filename': filename,
+                'title': info.get('title', 'Instagram Video'),
+                'duration': info.get('duration', 0),
+                'uploader': info.get('uploader', 'Instagram'),
+                'thumbnail': info.get('thumbnail', None),
+                'file_size': os.path.getsize(filename),
+                'download_time': download_time
+            }
+    except Exception as e:
+        logger.error(f"❌ Instagram fallback failed: {e}")
+        return {'success': False, 'error': f'Instagram download failed: {str(e)}'}
+
 def download_video(url: str, platform: str) -> dict:
     ydl_opts = YT_DLP_OPTS.copy()
     
+    # Platform-specific optimizations
     if platform == 'youtube':
         ydl_opts['format'] = 'best[height<=720][ext=mp4]/best[ext=mp4]'
     elif platform == 'instagram':
-        ydl_opts['format'] = 'best[ext=mp4]/best'
+        # Enhanced Instagram settings
+        ydl_opts.update({
+            'format': 'best[ext=mp4]/best',
+            'extractor_args': {
+                'instagram': {
+                    'requested_clips': ['original'],
+                }
+            }
+        })
     elif platform == 'tiktok':
         ydl_opts['format'] = 'best[ext=mp4]'
     elif platform == 'twitter':
@@ -326,6 +380,12 @@ def download_video(url: str, platform: str) -> dict:
             
     except Exception as e:
         logger.error(f"❌ Download failed from {platform}: {e}")
+        
+        # Try Instagram fallback if main method fails
+        if platform == 'instagram':
+            logger.info("🔄 Attempting Instagram fallback...")
+            return download_instagram_fallback(url)
+        
         return {'success': False, 'error': str(e)}
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -351,8 +411,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     platform_emoji = PLATFORM_EMOJIS.get(platform, '📹')
+    
+    # Add warning for Instagram
+    warning_text = ""
+    if platform == 'instagram':
+        warning_text = "\n\n⚠️ *Note:* Instagram downloads may be temporarily limited. TikTok, YouTube & Twitter work perfectly!"
+    
     processing_message = await update.message.reply_text(
-        f"⚡ *{platform_emoji} Processing {platform.title()}...*\n\n"
+        f"⚡ *{platform_emoji} Processing {platform.title()}...*{warning_text}\n\n"
         f"🚀 Downloading at lightning speed...\n"
         f"📦 Optimizing for fast delivery...\n"
         f"🎯 Almost ready!\n\n"
@@ -438,25 +504,50 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.warning(f"Cleanup failed: {e}")
                 
         else:
+            # Enhanced error messages for common issues
+            error_message = str(result.get('error', 'Unknown error')).lower()
+            
+            if 'rate-limit' in error_message or 'rate_limit' in error_message:
+                user_friendly_error = "🚫 *Rate Limit Reached*\n\nInstagram is temporarily blocking downloads. Please try:\n• Wait a few minutes\n• Try TikTok/YouTube/Twitter instead\n• Try a different Instagram link"
+            elif 'login required' in error_message or 'cookies' in error_message:
+                user_friendly_error = "🔐 *Instagram Login Required*\n\nInstagram now requires login for some downloads. Working on a fix!\n\n💡 Try TikTok, YouTube or Twitter links instead!"
+            elif 'not available' in error_message:
+                user_friendly_error = "❌ *Content Not Available*\n\nThis content might be:\n• Private or deleted\n• Age-restricted\n• Region-locked\n\n💡 Try a different link!"
+            elif 'instagram' in error_message:
+                user_friendly_error = "📸 *Instagram Temporary Issue*\n\nInstagram is being difficult right now! 😅\n\n✨ *Good News:* TikTok, YouTube & Twitter work perfectly!\n💡 Try a link from those platforms instead."
+            else:
+                user_friendly_error = f"❌ *Download Failed*\n\nSorry {user.first_name}! 😔\n\n*Reason:* {result.get('error', 'Unknown error')[:100]}\n\n💡 Try another link!"
+            
             await context.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=processing_message.message_id,
-                text=f"❌ *Download Failed* ❌\n\nSorry {user.first_name}! 😔\n\n*Reason:* {result.get('error', 'Unknown error')}\n\n💡 Try another link!\n\n{CREATOR_HASHTAG}",
+                text=f"{user_friendly_error}\n\n{CREATOR_HASHTAG}",
                 parse_mode='Markdown'
             )
 
     except Exception as e:
         logger.error(f"💥 Unexpected error: {e}")
+        
+        # Enhanced error handling for common issues
+        error_message = str(e).lower()
+        
+        if 'rate-limit' in error_message or 'rate_limit' in error_message:
+            user_friendly_error = "🚫 *Rate Limit Reached*\n\nPlatform is temporarily blocking downloads. Please try again in a few minutes!"
+        elif 'instagram' in error_message:
+            user_friendly_error = "📸 *Instagram Issue*\n\nInstagram is having temporary download limits. TikTok, YouTube & Twitter work perfectly! 🚀"
+        else:
+            user_friendly_error = f"⚡ *Temporary Error*\n\nPlease try again with a different link!\n\nError: {str(e)[:100]}..."
+        
         try:
             await context.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=processing_message.message_id,
-                text=f"⚡ *System Error* ⚡\n\nTemporary issue! Try again in a moment. 😊\n\n{CREATOR_HASHTAG}",
+                text=f"{user_friendly_error}\n\n{CREATOR_HASHTAG}",
                 parse_mode='Markdown'
             )
         except:
             await update.message.reply_text(
-                f"⚡ *Temporary Error* ⚡\n\nPlease try again! 😊\n\n{CREATOR_HASHTAG}",
+                f"{user_friendly_error}\n\n{CREATOR_HASHTAG}",
                 parse_mode='Markdown'
             )
 
@@ -492,6 +583,8 @@ def main():
         print("📸 Supporting: Instagram, TikTok, YouTube, Twitter")
         print(f"💫 Creator: {CREATOR_HASHTAG}")
         print("🚀 Hosted on Koyeb - 24/7 Service Active!")
+        print("🛡️  Enhanced error handling enabled!")
+        print("🔄 Instagram fallback methods activated!")
         
         application.run_polling()
         
@@ -500,5 +593,4 @@ def main():
         print(f"❌ Bot startup failed: {e}")
 
 if __name__ == '__main__':
-
     main()
