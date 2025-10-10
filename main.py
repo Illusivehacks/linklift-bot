@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8275983870:AAGdsF0apIb57a5Oa3wumdUVLC9tLBIN-jQ")
-CREATOR_HASHTAG = "#illusivehacks"
+CREATOR_HASHTAG = "@illusivehacks"
 SUPPORTED_PLATFORMS = {
     'instagram': r'(https?://(?:www\.)?instagram\.com/(?:p|reel|stories)/)',
     'tiktok': r'(https?://(?:www\.|vm\.|vt\.)?tiktok\.com/)',
@@ -594,3 +594,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
